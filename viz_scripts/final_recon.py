@@ -71,10 +71,10 @@ def load_scene_data(scene_path, first_frame_w2c, intrinsics):
         log_scales = torch.tile(params['log_scales'], (1, 3))
     else:
         log_scales = params['log_scales']
-
+    print(params.keys())
     rendervar = {
         'means3D': params['means3D'],
-        'colors_precomp': params['rgb_colors'],
+        'colors_precomp': params['semantic_colors'],
         'rotations': torch.nn.functional.normalize(params['unnorm_rotations']),
         'opacities': torch.sigmoid(params['logit_opacities']),
         'scales': torch.exp(log_scales),
@@ -88,6 +88,7 @@ def load_scene_data(scene_path, first_frame_w2c, intrinsics):
         'scales': torch.exp(log_scales),
         'means2D': torch.zeros_like(params['means3D'], device="cuda")
     }
+    
     return rendervar, depth_rendervar, all_w2cs
 
 
@@ -288,7 +289,7 @@ if __name__ == "__main__":
 
     seed_everything(seed=experiment.config["seed"])
 
-    if "scene_path" not in experiment.config:
+    if "g" not in experiment.config:
         results_dir = os.path.join(
             experiment.config["workdir"], experiment.config["run_name"]
         )

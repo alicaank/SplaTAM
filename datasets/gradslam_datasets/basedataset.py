@@ -167,7 +167,7 @@ class GradSLAMDataset(torch.utils.data.Dataset):
         if "crop_edge" in config_dict["camera_params"].keys():
             self.crop_edge = config_dict["camera_params"]["crop_edge"]
 
-        self.color_paths, self.depth_paths, self.embedding_paths = self.get_filepaths()
+        self.color_paths, self.depth_paths, self.semantic_paths, self.embedding_paths, self.language_seg_paths, self.language_feat_paths = self.get_filepaths()
         if len(self.color_paths) != len(self.depth_paths):
             raise ValueError("Number of color and depth images must be the same.")
         if self.load_embeddings:
@@ -181,6 +181,9 @@ class GradSLAMDataset(torch.utils.data.Dataset):
 
         self.color_paths = self.color_paths[self.start : self.end : stride]
         self.depth_paths = self.depth_paths[self.start : self.end : stride]
+        self.semantic_paths = self.semantic_paths[self.start : self.end : stride]
+        self.language_seg_paths = self.language_seg_paths[self.start : self.end : stride]
+        self.language_feat_paths = self.language_feat_paths[self.start : self.end : stride]
         if self.load_embeddings:
             self.embedding_paths = self.embedding_paths[self.start : self.end : stride]
         self.poses = self.poses[self.start : self.end : stride]
@@ -296,8 +299,11 @@ class GradSLAMDataset(torch.utils.data.Dataset):
     def __getitem__(self, index):
         color_path = self.color_paths[index]
         depth_path = self.depth_paths[index]
+        semantic_path = self.semantic_paths[index]
         color = np.asarray(imageio.imread(color_path), dtype=float)
         color = self._preprocess_color(color)
+        semantic = np.asarray(imageio.imread(semantic_path), dtype=float)
+        semantic = self._preprocess_color(semantic)
         if ".png" in depth_path:
             # depth_data = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
             depth = np.asarray(imageio.imread(depth_path), dtype=np.int64)
@@ -308,8 +314,11 @@ class GradSLAMDataset(torch.utils.data.Dataset):
         if self.distortion is not None:
             # undistortion is only applied on color image, not depth!
             color = cv2.undistort(color, K, self.distortion)
+            semantic = cv2.undistort(semantic, K, self.distortion)
 
         color = torch.from_numpy(color)
+        semantic = torch.from_numpy(semantic)
+
         K = torch.from_numpy(K)
 
         depth = self._preprocess_depth(depth)
@@ -326,6 +335,7 @@ class GradSLAMDataset(torch.utils.data.Dataset):
             return (
                 color.to(self.device).type(self.dtype),
                 depth.to(self.device).type(self.dtype),
+                semantic.to(self.device).type(self.dtype),
                 intrinsics.to(self.device).type(self.dtype),
                 pose.to(self.device).type(self.dtype),
                 embedding.to(self.device),  # Allow embedding to be another dtype
@@ -335,7 +345,43 @@ class GradSLAMDataset(torch.utils.data.Dataset):
         return (
             color.to(self.device).type(self.dtype),
             depth.to(self.device).type(self.dtype),
+            semantic.to(self.device).type(self.dtype),
             intrinsics.to(self.device).type(self.dtype),
             pose.to(self.device).type(self.dtype),
             # self.retained_inds[index].item(),
         )
+        
+    def get_language_feature(self, language_feature_dir, feature_level, index):
+        seg_map = torch.from_numpy(np.load(self.language_seg_paths[index]))
+        feature_map = torch.from_numpy(np.load(self.language_feat_paths[index]))
+        
+        # elif str(language_feature_name).split('.')[-1] == 'pkl':
+        #     with open(language_feature_name, 'rb') as f:
+        #         data = pickle.load(f)
+        #     seg_map = data['seg_maps']
+        #     feature_tensor = data['feature']
+        # print(seg_map.shape, feature_tensor.shape)torch.Size([4, 832, 1264]) torch.Size([391, 512])
+        # feature_map = torch.zeros(512, self.image_height, self.image_width)
+        y, x = torch.meshgrid(torch.arange(0, self.image_height), torch.arange(0, self.image_width))
+        x = x.reshape(-1, 1)
+        y = y.reshape(-1, 1)
+        seg = seg_map[:, y, x].squeeze(-1).long()
+        mask = seg != -1
+        if feature_level == 0: # default
+            point_feature1 = feature_map[seg[0:1]].squeeze(0)
+            mask = mask[0:1].reshape(1, self.image_height, self.image_width)
+        elif feature_level == 1: # s
+            point_feature1 = feature_map[seg[1:2]].squeeze(0)
+            mask = mask[1:2].reshape(1, self.image_height, self.image_width)
+        elif feature_level == 2: # m
+            point_feature1 = feature_map[seg[2:3]].squeeze(0)
+            mask = mask[2:3].reshape(1, self.image_height, self.image_width)
+        elif feature_level == 3: # l
+            point_feature1 = feature_map[seg[3:4]].squeeze(0)
+            mask = mask[3:4].reshape(1, self.image_height, self.image_width)
+        else:
+            raise ValueError("feature_level=", feature_level)
+        # point_feature = torch.cat((point_feature2, point_feature3, point_feature4), dim=-1).to('cuda')
+        point_feature = point_feature1.reshape(self.image_height, self.image_width, -1).permute(2, 0, 1)
+       
+        return point_feature.cuda(), mask.cuda()

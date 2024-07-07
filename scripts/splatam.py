@@ -29,7 +29,7 @@ from utils.eval_helpers import report_loss, report_progress, eval
 from utils.keyframe_selection import keyframe_selection_overlap
 from utils.recon_helpers import setup_camera
 from utils.slam_helpers import (
-    transformed_params2rendervar, transformed_params2depthplussilhouette,
+    transformed_params2rendervar, transformed_params2depthplussilhouette, transformed_semanticparams2rendervar, transformed_languageparams2rendervar,
     transform_to_frame, l1_loss_v1, matrix_to_quaternion
 )
 from utils.slam_external import calc_ssim, build_rotation, prune_gaussians, densify
@@ -64,7 +64,7 @@ def get_dataset(config_dict, basedir, sequence, **kwargs):
         raise ValueError(f"Unknown dataset name {config_dict['dataset_name']}")
 
 
-def get_pointcloud(color, depth, intrinsics, w2c, transform_pts=True, 
+def get_pointcloud(color, depth, semantic, intrinsics, w2c, transform_pts=True, 
                    mask=None, compute_mean_sq_dist=False, mean_sq_dist_method="projective"):
     width, height = color.shape[2], color.shape[1]
     CX = intrinsics[0][2]
@@ -104,7 +104,11 @@ def get_pointcloud(color, depth, intrinsics, w2c, transform_pts=True,
     # Colorize point cloud
     cols = torch.permute(color, (1, 2, 0)).reshape(-1, 3) # (C, H, W) -> (H, W, C) -> (H * W, C)
     point_cld = torch.cat((pts, cols), -1)
-
+    
+    # Semantic point cloud
+    semantic = torch.permute(semantic, (1, 2, 0)).reshape(-1, 3) # (C, H, W) -> (H, W, C) -> (H * W, C)
+    point_cld = torch.cat((point_cld, semantic), -1)
+    
     # Select points based on mask
     if mask is not None:
         point_cld = point_cld[mask]
@@ -131,6 +135,7 @@ def initialize_params(init_pt_cld, num_frames, mean3_sq_dist, gaussian_distribut
     params = {
         'means3D': means3D,
         'rgb_colors': init_pt_cld[:, 3:6],
+        'semantic_colors': init_pt_cld[:, 6:9],
         'unnorm_rotations': unnorm_rots,
         'logit_opacities': logit_opacities,
         'log_scales': log_scales,
@@ -169,10 +174,11 @@ def initialize_optimizer(params, lrs_dict, tracking):
 def initialize_first_timestep(dataset, num_frames, scene_radius_depth_ratio, 
                               mean_sq_dist_method, densify_dataset=None, gaussian_distribution=None):
     # Get RGB-D Data & Camera Parameters
-    color, depth, intrinsics, pose = dataset[0]
+    color, depth, semantic, intrinsics, pose = dataset[0]
 
     # Process RGB-D Data
     color = color.permute(2, 0, 1) / 255 # (H, W, C) -> (C, H, W)
+    semantic = semantic.permute(2, 0, 1) / 255 # (H, W, C) -> (C, H, W)
     depth = depth.permute(2, 0, 1) # (H, W, C) -> (C, H, W)
     
     # Process Camera Parameters
@@ -195,7 +201,7 @@ def initialize_first_timestep(dataset, num_frames, scene_radius_depth_ratio,
     # Get Initial Point Cloud (PyTorch CUDA Tensor)
     mask = (depth > 0) # Mask out invalid depth values
     mask = mask.reshape(-1)
-    init_pt_cld, mean3_sq_dist = get_pointcloud(color, depth, densify_intrinsics, w2c, 
+    init_pt_cld, mean3_sq_dist = get_pointcloud(color, depth, semantic, densify_intrinsics, w2c, 
                                                 mask=mask, compute_mean_sq_dist=True, 
                                                 mean_sq_dist_method=mean_sq_dist_method)
 
@@ -210,10 +216,9 @@ def initialize_first_timestep(dataset, num_frames, scene_radius_depth_ratio,
     else:
         return params, variables, intrinsics, w2c, cam
 
-
 def get_loss(params, curr_data, variables, iter_time_idx, loss_weights, use_sil_for_loss,
              sil_thres, use_l1, ignore_outlier_depth_loss, tracking=False, 
-             mapping=False, do_ba=False, plot_dir=None, visualize_tracking_loss=False, tracking_iteration=None):
+             mapping=False, do_ba=False, plot_dir=None, visualize_tracking_loss=False, tracking_iteration=None, language_feature = None, language_feature_mask = None):
     # Initialize Loss Dictionary
     losses = {}
 
@@ -243,12 +248,25 @@ def get_loss(params, curr_data, variables, iter_time_idx, loss_weights, use_sil_
     rendervar = transformed_params2rendervar(params, transformed_gaussians)
     depth_sil_rendervar = transformed_params2depthplussilhouette(params, curr_data['w2c'],
                                                                  transformed_gaussians)
+    semantic_rendervar = transformed_semanticparams2rendervar(params, transformed_gaussians)
+    
 
     # RGB Rendering
     rendervar['means2D'].retain_grad()
     im, radius, _, = Renderer(raster_settings=curr_data['cam'])(**rendervar)
     variables['means2D'] = rendervar['means2D']  # Gradient only accum from colour render for densification
-
+    
+    # Semantic Rendering
+    semantic_rendervar['means2D'].retain_grad()
+    sem_im, sem_radius, _, = Renderer(raster_settings=curr_data['cam'])(**semantic_rendervar)
+    
+    if language_feature:
+        # Language Rendering
+        language_rendervar = transformed_languageparams2rendervar(params, transformed_gaussians)
+        language_rendervar['means2D'].retain_grad()
+        language_im, language_radius, _, = Renderer(raster_settings=curr_data['cam'])(**language_rendervar)
+    
+    
     # Depth & Silhouette Rendering
     depth_sil, _, _, = Renderer(raster_settings=curr_data['cam'])(**depth_sil_rendervar)
     depth = depth_sil[0, :, :].unsqueeze(0)
@@ -288,7 +306,22 @@ def get_loss(params, curr_data, variables, iter_time_idx, loss_weights, use_sil_
         losses['im'] = torch.abs(curr_data['im'] - im).sum()
     else:
         losses['im'] = 0.8 * l1_loss_v1(im, curr_data['im']) + 0.2 * (1.0 - calc_ssim(im, curr_data['im']))
+        
 
+    # Semantic Loss
+    if tracking and (use_sil_for_loss or ignore_outlier_depth_loss):
+        color_mask = torch.tile(mask, (3, 1, 1))
+        color_mask = color_mask.detach()
+        losses['semantic'] = torch.abs(curr_data['semantic'] - sem_im)[color_mask].sum()
+    elif tracking:
+        losses['semantic'] = torch.abs(curr_data['semantic'] - sem_im).sum()
+    else:
+        losses['semantic'] = 0.8 * l1_loss_v1(sem_im, curr_data['semantic']) + 0.2 * (1.0 - calc_ssim(sem_im, curr_data['semantic']))
+        
+    
+    # Language Loss
+    losses['language'] =  torch.abs((language_im*language_feature_mask - language_feature*language_feature_mask)).mean()
+    # Loss
     # Visualize the Diff Images
     if tracking and visualize_tracking_loss:
         fig, ax = plt.subplots(2, 4, figsize=(12, 6))
@@ -347,7 +380,7 @@ def get_loss(params, curr_data, variables, iter_time_idx, loss_weights, use_sil_
     return loss, variables, weighted_losses
 
 
-def initialize_new_params(new_pt_cld, mean3_sq_dist, gaussian_distribution):
+def initialize_new_params(new_pt_cld, mean3_sq_dist, gaussian_distribution, language_features=None):
     num_pts = new_pt_cld.shape[0]
     means3D = new_pt_cld[:, :3] # [num_gaussians, 3]
     unnorm_rots = np.tile([1, 0, 0, 0], (num_pts, 1)) # [num_gaussians, 4]
@@ -358,13 +391,27 @@ def initialize_new_params(new_pt_cld, mean3_sq_dist, gaussian_distribution):
         log_scales = torch.tile(torch.log(torch.sqrt(mean3_sq_dist))[..., None], (1, 3))
     else:
         raise ValueError(f"Unknown gaussian_distribution {gaussian_distribution}")
-    params = {
-        'means3D': means3D,
-        'rgb_colors': new_pt_cld[:, 3:6],
-        'unnorm_rotations': unnorm_rots,
-        'logit_opacities': logit_opacities,
-        'log_scales': log_scales,
-    }
+    if language_features is not None:
+        language_feature_precomp = language_features
+        language_feature_precomp = language_feature_precomp/ (language_feature_precomp.norm(dim=-1, keepdim=True) + 1e-9)
+        params = {
+            'means3D': means3D,
+            'rgb_colors': new_pt_cld[:, 3:6],
+            'semantic_colors': new_pt_cld[:, 6:9],
+            'unnorm_rotations': unnorm_rots,
+            'language_feature': language_feature_precomp,
+            'logit_opacities': logit_opacities,
+            'log_scales': log_scales,
+        }
+    else:
+        params = {
+            'means3D': means3D,
+            'rgb_colors': new_pt_cld[:, 3:6],
+            'semantic_colors': new_pt_cld[:, 6:9],
+            'unnorm_rotations': unnorm_rots,
+            'logit_opacities': logit_opacities,
+            'log_scales': log_scales,
+        }
     for k, v in params.items():
         # Check if value is already a torch tensor
         if not isinstance(v, torch.Tensor):
@@ -404,10 +451,15 @@ def add_new_gaussians(params, variables, curr_data, sil_thres,
         curr_w2c[:3, 3] = curr_cam_tran
         valid_depth_mask = (curr_data['depth'][0, :, :] > 0)
         non_presence_mask = non_presence_mask & valid_depth_mask.reshape(-1)
-        new_pt_cld, mean3_sq_dist = get_pointcloud(curr_data['im'], curr_data['depth'], curr_data['intrinsics'], 
-                                    curr_w2c, mask=non_presence_mask, compute_mean_sq_dist=True,
-                                    mean_sq_dist_method=mean_sq_dist_method)
-        new_params = initialize_new_params(new_pt_cld, mean3_sq_dist, gaussian_distribution)
+        
+        new_pt_cld, mean3_sq_dist = get_pointcloud(curr_data['im'], curr_data['depth'], curr_data['semantic'], curr_data['intrinsics'], 
+                                        curr_w2c, mask=non_presence_mask, compute_mean_sq_dist=True,
+                                        mean_sq_dist_method=mean_sq_dist_method)
+        if time_idx % 5 == 0:
+            new_params = initialize_new_params(new_pt_cld, mean3_sq_dist, gaussian_distribution, curr_data['gt_language_features'])
+
+        else:
+            new_params = initialize_new_params(new_pt_cld, mean3_sq_dist, gaussian_distribution)
         for k, v in new_params.items():
             params[k] = torch.nn.Parameter(torch.cat((params[k], v), dim=0).requires_grad_(True))
         num_pts = params['means3D'].shape[0]
@@ -533,7 +585,6 @@ def rgbd_slam(config: dict):
     num_frames = dataset_config["num_frames"]
     if num_frames == -1:
         num_frames = len(dataset)
-
     # Init seperate dataloader for densification if required
     if seperate_densification_res:
         densify_dataset = get_dataset(
@@ -618,7 +669,7 @@ def rgbd_slam(config: dict):
         # Update the ground truth poses list
         for time_idx in range(checkpoint_time_idx):
             # Load RGBD frames incrementally instead of all frames
-            color, depth, _, gt_pose = dataset[time_idx]
+            color, depth, semantic, _, gt_pose = dataset[time_idx]
             # Process poses
             gt_w2c = torch.linalg.inv(gt_pose)
             gt_w2c_all_frames.append(gt_w2c)
@@ -632,8 +683,9 @@ def rgbd_slam(config: dict):
                 curr_w2c[:3, 3] = curr_cam_tran
                 # Initialize Keyframe Info
                 color = color.permute(2, 0, 1) / 255
+                semantic = semantic.permute(2, 0, 1) / 255
                 depth = depth.permute(2, 0, 1)
-                curr_keyframe = {'id': time_idx, 'est_w2c': curr_w2c, 'color': color, 'depth': depth}
+                curr_keyframe = {'id': time_idx, 'est_w2c': curr_w2c, 'color': color, 'depth': depth, 'semantic': semantic}
                 # Add to keyframe list
                 keyframe_list.append(curr_keyframe)
     else:
@@ -642,19 +694,31 @@ def rgbd_slam(config: dict):
     # Iterate over Scan
     for time_idx in tqdm(range(checkpoint_time_idx, num_frames)):
         # Load RGBD frames incrementally instead of all frames
-        color, depth, _, gt_pose = dataset[time_idx]
+        color, depth, semantic, _, gt_pose = dataset[time_idx]
+        gt_language_feature, language_feature_mask = None, None
         # Process poses
         gt_w2c = torch.linalg.inv(gt_pose)
         # Process RGB-D Data
         color = color.permute(2, 0, 1) / 255
+        semantic = semantic.permute(2, 0, 1) / 255
         depth = depth.permute(2, 0, 1)
         gt_w2c_all_frames.append(gt_w2c)
         curr_gt_w2c = gt_w2c_all_frames
         # Optimize only current time step for tracking
         iter_time_idx = time_idx
+        curr_data = {}
+        
         # Initialize Mapping Data for selected frame
-        curr_data = {'cam': cam, 'im': color, 'depth': depth, 'id': iter_time_idx, 'intrinsics': intrinsics, 
-                     'w2c': first_frame_w2c, 'iter_gt_w2c_list': curr_gt_w2c}
+        if time_idx % 5 == 0:
+            cam.include_features = True
+            gt_language_feature, language_feature_mask = dataset.get_language_feature(time_idx)
+            curr_data = {'cam': cam, 'im': color, 'depth': depth, 'semantic': semantic, 'gt_language_feature': gt_language_feature, 'language_feature_mask': language_feature_mask, 'id': iter_time_idx, 'intrinsics': intrinsics, 
+            'w2c': first_frame_w2c, 'iter_gt_w2c_list': curr_gt_w2c}
+            
+        else:
+            cam.include_features = False
+            curr_data = {'cam': cam, 'im': color, 'depth': depth, 'semantic': semantic, 'id': iter_time_idx, 'intrinsics': intrinsics, 
+            'w2c': first_frame_w2c, 'iter_gt_w2c_list': curr_gt_w2c}
         
         # Initialize Data for Tracking
         if seperate_tracking_res:
@@ -662,7 +726,7 @@ def rgbd_slam(config: dict):
             tracking_color = tracking_color.permute(2, 0, 1) / 255
             tracking_depth = tracking_depth.permute(2, 0, 1)
             tracking_curr_data = {'cam': tracking_cam, 'im': tracking_color, 'depth': tracking_depth, 'id': iter_time_idx,
-                                  'intrinsics': tracking_intrinsics, 'w2c': first_frame_w2c, 'iter_gt_w2c_list': curr_gt_w2c}
+                                'intrinsics': tracking_intrinsics, 'w2c': first_frame_w2c, 'iter_gt_w2c_list': curr_gt_w2c}
         else:
             tracking_curr_data = curr_data
 
@@ -830,23 +894,35 @@ def rgbd_slam(config: dict):
                 # Randomly select a frame until current time step amongst keyframes
                 rand_idx = np.random.randint(0, len(selected_keyframes))
                 selected_rand_keyframe_idx = selected_keyframes[rand_idx]
+                iter_language = None
+                iter_language_feature_mask = None
                 if selected_rand_keyframe_idx == -1:
                     # Use Current Frame Data
                     iter_time_idx = time_idx
                     iter_color = color
+                    iter_semantic = semantic
                     iter_depth = depth
+                    if time_idx % 5 == 0:
+                        iter_language = gt_language_feature
+                        iter_language_feature_mask = language_feature_mask
                 else:
                     # Use Keyframe Data
                     iter_time_idx = keyframe_list[selected_rand_keyframe_idx]['id']
                     iter_color = keyframe_list[selected_rand_keyframe_idx]['color']
+                    iter_semantic = keyframe_list[selected_rand_keyframe_idx]['semantic']
                     iter_depth = keyframe_list[selected_rand_keyframe_idx]['depth']
+                    
+                    if selected_rand_keyframe_idx % 5 == 0:
+                        iter_language, iter_language_feature_mask = dataset.get_language_feature(selected_rand_keyframe_idx)
+                    
                 iter_gt_w2c = gt_w2c_all_frames[:iter_time_idx+1]
-                iter_data = {'cam': cam, 'im': iter_color, 'depth': iter_depth, 'id': iter_time_idx, 
+                iter_data = {'cam': cam, 'im': iter_color, 'depth': iter_depth, 'semantic' : iter_semantic, 'id': iter_time_idx, 
                              'intrinsics': intrinsics, 'w2c': first_frame_w2c, 'iter_gt_w2c_list': iter_gt_w2c}
                 # Loss for current frame
+                
                 loss, variables, losses = get_loss(params, iter_data, variables, iter_time_idx, config['mapping']['loss_weights'],
                                                 config['mapping']['use_sil_for_loss'], config['mapping']['sil_thres'],
-                                                config['mapping']['use_l1'], config['mapping']['ignore_outlier_depth_loss'], mapping=True)
+                                                config['mapping']['use_l1'], config['mapping']['ignore_outlier_depth_loss'], mapping=True, language_feature = iter_language, language_feature_mask = iter_language_feature_mask)
                 if config['use_wandb']:
                     # Report Loss
                     wandb_mapping_step = report_loss(losses, wandb_run, wandb_mapping_step, mapping=True)
@@ -919,7 +995,7 @@ def rgbd_slam(config: dict):
                 curr_w2c[:3, :3] = build_rotation(curr_cam_rot)
                 curr_w2c[:3, 3] = curr_cam_tran
                 # Initialize Keyframe Info
-                curr_keyframe = {'id': time_idx, 'est_w2c': curr_w2c, 'color': color, 'depth': depth}
+                curr_keyframe = {'id': time_idx, 'est_w2c': curr_w2c, 'color': color, 'depth': depth, 'semantic': semantic}
                 # Add to keyframe list
                 keyframe_list.append(curr_keyframe)
                 keyframe_time_indices.append(time_idx)
