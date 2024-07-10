@@ -8,9 +8,9 @@ natsort
 pyyaml
 wandb
 lpips
-open3d==0.13.0
+open3d==0.17.0
 torchmetrics
 cyclonedds
 pytorch-msssim
 plyfile==0.8.1
-git+https://github.com/alicaank/diff-gaussian-rasterization-w-depth
+git+https://github.com/alicaank/diff-gaussian-rasterization-w-depth.git@16a36ea36e3746e530ec7fab5789e2b2a6b05587

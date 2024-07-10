@@ -214,15 +214,16 @@ def report_progress(params, data, i, progress_bar, iter_time_idx, sil_thres, eve
 
         # Initialize Render Variables
         rendervar = transformed_params2rendervar(params, transformed_gaussians)
+
         depth_sil_rendervar = transformed_params2depthplussilhouette(params, data['w2c'], 
                                                                      transformed_gaussians)
-        depth_sil, _, _, = Renderer(raster_settings=data['cam'])(**depth_sil_rendervar)
+        depth_sil, _, _, _, = Renderer(raster_settings=data['cam'])(**depth_sil_rendervar)
         rastered_depth = depth_sil[0, :, :].unsqueeze(0)
         valid_depth_mask = (data['depth'] > 0)
         silhouette = depth_sil[1, :, :]
         presence_sil_mask = (silhouette > sil_thres)
 
-        im, _, _, = Renderer(raster_settings=data['cam'])(**rendervar)
+        im, _, _, _, = Renderer(raster_settings=data['cam'])(**rendervar)
         if tracking:
             psnr = calc_psnr(im * presence_sil_mask, data['im'] * presence_sil_mask).mean()
         else:
@@ -413,9 +414,7 @@ def eval(dataset, final_params, num_frames, eval_dir, sil_thres,
     l1_list = []
     lpips_list = []
     ssim_list = []
-    psnr_semantic_list=[]
-    ssim_semantic_list=[]
-    lpips_semantic_list=[]
+
         
     plot_dir = os.path.join(eval_dir, "plots")
     os.makedirs(plot_dir, exist_ok=True)
@@ -465,10 +464,10 @@ def eval(dataset, final_params, num_frames, eval_dir, sil_thres,
         
         depth_sil_rendervar = transformed_params2depthplussilhouette(final_params, curr_data['w2c'],
                                                                      transformed_gaussians)
-        semantic_rendervar = transformed_semanticparams2rendervar(final_params, transformed_gaussians)
+        # semantic_rendervar = transformed_semanticparams2rendervar(final_params, transformed_gaussians)
 
         # Render Depth & Silhouette
-        depth_sil, _, _, = Renderer(raster_settings=curr_data['cam'])(**depth_sil_rendervar)
+        depth_sil, _, _, _, = Renderer(raster_settings=curr_data['cam'])(**depth_sil_rendervar)
         rastered_depth = depth_sil[0, :, :].unsqueeze(0)
         # Mask invalid depth in GT
         valid_depth_mask = (curr_data['depth'] > 0)
@@ -478,7 +477,7 @@ def eval(dataset, final_params, num_frames, eval_dir, sil_thres,
         presence_sil_mask = (silhouette > sil_thres)
         
         # Render RGB and Calculate PSNR
-        im, radius, _, = Renderer(raster_settings=curr_data['cam'])(**rendervar)
+        im, _, radius, _, = Renderer(raster_settings=curr_data['cam'])(**rendervar)
         if mapping_iters==0 and not add_new_gaussians:
             weighted_im = im * presence_sil_mask * valid_depth_mask
             weighted_gt_im = curr_data['im'] * presence_sil_mask * valid_depth_mask
@@ -497,22 +496,22 @@ def eval(dataset, final_params, num_frames, eval_dir, sil_thres,
         
 
         # Render Semantic and Calculate PSNR
-        semantic_im, radius, _, = Renderer(raster_settings=curr_data['cam'])(**semantic_rendervar)
-        if mapping_iters==0 and not add_new_gaussians:
-            weighted_im = semantic_im * presence_sil_mask * valid_depth_mask
-            weighted_gt_im = curr_data['semantic'] * presence_sil_mask * valid_depth_mask
-        else:
-            weighted_im = semantic_im * valid_depth_mask
-            weighted_gt_im = curr_data['semantic'] * valid_depth_mask
-        psnr_semantic = calc_psnr(weighted_im, weighted_gt_im).mean()
-        ssim_semantic = ms_ssim(weighted_im.unsqueeze(0).cpu(), weighted_gt_im.unsqueeze(0).cpu(), 
-                        data_range=1.0, size_average=True)
-        lpips_score_semantic = loss_fn_alex(torch.clamp(weighted_im.unsqueeze(0), 0.0, 1.0),
-                                    torch.clamp(weighted_gt_im.unsqueeze(0), 0.0, 1.0)).item()
+        # semantic_im, radius, _, = Renderer(raster_settings=curr_data['cam'])(**semantic_rendervar)
+        # if mapping_iters==0 and not add_new_gaussians:
+        #     weighted_im = semantic_im * presence_sil_mask * valid_depth_mask
+        #     weighted_gt_im = curr_data['semantic'] * presence_sil_mask * valid_depth_mask
+        # else:
+        #     weighted_im = semantic_im * valid_depth_mask
+        #     weighted_gt_im = curr_data['semantic'] * valid_depth_mask
+        # psnr_semantic = calc_psnr(weighted_im, weighted_gt_im).mean()
+        # ssim_semantic = ms_ssim(weighted_im.unsqueeze(0).cpu(), weighted_gt_im.unsqueeze(0).cpu(), 
+        #                 data_range=1.0, size_average=True)
+        # lpips_score_semantic = loss_fn_alex(torch.clamp(weighted_im.unsqueeze(0), 0.0, 1.0),
+        #                             torch.clamp(weighted_gt_im.unsqueeze(0), 0.0, 1.0)).item()
 
-        psnr_semantic_list.append(psnr_semantic.cpu().numpy())
-        ssim_semantic_list.append(ssim_semantic.cpu().numpy())
-        lpips_semantic_list.append(lpips_score_semantic)
+        # psnr_semantic_list.append(psnr_semantic.cpu().numpy())
+        # ssim_semantic_list.append(ssim_semantic.cpu().numpy())
+        # lpips_semantic_list.append(lpips_score_semantic)
 
         # Compute Depth RMSE
         if mapping_iters==0 and not add_new_gaussians:
@@ -602,29 +601,29 @@ def eval(dataset, final_params, num_frames, eval_dir, sil_thres,
     
     # Compute Average Metrics
     psnr_list = np.array(psnr_list)
-    psnr_semantic_list = np.array(psnr_semantic_list)
+    # psnr_semantic_list = np.array(psnr_semantic_list)
     rmse_list = np.array(rmse_list)
     l1_list = np.array(l1_list)
     ssim_list = np.array(ssim_list)
-    ssim_semantic_list = np.array(ssim_semantic_list)
+    # ssim_semantic_list = np.array(ssim_semantic_list)
     lpips_list = np.array(lpips_list)
-    lpips_semantic_list = np.array(lpips_semantic_list)
+    # lpips_semantic_list = np.array(lpips_semantic_list)
     avg_psnr = psnr_list.mean()
-    avg_semantic_psnr = psnr_semantic_list.mean()
+    # avg_semantic_psnr = psnr_semantic_list.mean()
     avg_rmse = rmse_list.mean()
     avg_l1 = l1_list.mean()
     avg_ssim = ssim_list.mean()
     avg_lpips = lpips_list.mean()
-    avg_semantic_ssim = ssim_semantic_list.mean()
-    avg_semantic_lpips = lpips_semantic_list.mean()
+    # avg_semantic_ssim = ssim_semantic_list.mean()
+    # avg_semantic_lpips = lpips_semantic_list.mean()
     print("Average PSNR: {:.2f}".format(avg_psnr))
-    print("Average Semantic PSNR: {:.2f}".format(avg_semantic_psnr))
+    # print("Average Semantic PSNR: {:.2f}".format(avg_semantic_psnr))
     print("Average Depth RMSE: {:.2f} cm".format(avg_rmse*100))
     print("Average Depth L1: {:.2f} cm".format(avg_l1*100))
     print("Average MS-SSIM: {:.3f}".format(avg_ssim))
     print("Average LPIPS: {:.3f}".format(avg_lpips))
-    print("Average Semantic MS-SSIM: {:.3f}".format(avg_semantic_ssim))
-    print("Average Semantic LPIPS: {:.3f}".format(avg_semantic_lpips))
+    # print("Average Semantic MS-SSIM: {:.3f}".format(avg_semantic_ssim))
+    # print("Average Semantic LPIPS: {:.3f}".format(avg_semantic_lpips))
 
     if wandb_run is not None:
         wandb_run.log({"Final Stats/Average PSNR": avg_psnr, 
@@ -636,14 +635,14 @@ def eval(dataset, final_params, num_frames, eval_dir, sil_thres,
 
     # Save metric lists as text files
     np.savetxt(os.path.join(eval_dir, "psnr.txt"), psnr_list)
-    np.savetxt(os.path.join(eval_dir, "psnr_semantic.txt"), psnr_semantic_list)
+    # np.savetxt(os.path.join(eval_dir, "psnr_semantic.txt"), psnr_semantic_list)
 
     np.savetxt(os.path.join(eval_dir, "rmse.txt"), rmse_list)
     np.savetxt(os.path.join(eval_dir, "l1.txt"), l1_list)
     np.savetxt(os.path.join(eval_dir, "ssim.txt"), ssim_list)
     np.savetxt(os.path.join(eval_dir, "lpips.txt"), lpips_list)
-    np.savetxt(os.path.join(eval_dir, "ssim_semantic.txt"), ssim_semantic_list)
-    np.savetxt(os.path.join(eval_dir, "lpips_semantic.txt"), lpips_semantic_list)
+    # np.savetxt(os.path.join(eval_dir, "ssim_semantic.txt"), ssim_semantic_list)
+    # np.savetxt(os.path.join(eval_dir, "lpips_semantic.txt"), lpips_semantic_list)
     # Plot PSNR & L1 as line plots
     fig, axs = plt.subplots(1, 3, figsize=(12, 4))
     axs[0].plot(np.arange(len(psnr_list)), psnr_list)
@@ -654,11 +653,8 @@ def eval(dataset, final_params, num_frames, eval_dir, sil_thres,
     axs[1].set_title("Depth L1")
     axs[1].set_xlabel("Time Step")
     axs[1].set_ylabel("L1 (cm)")
-    axs[2].plot(np.arange(len(psnr_semantic_list)), psnr_semantic_list)
-    axs[2].set_title("Semantic PSNR")
-    axs[2].set_xlabel("Time Step")
-    axs[2].set_ylabel("PSNR")
-    fig.suptitle("Average PSNR: {:.2f}, Average Depth L1: {:.2f} cm, Average Semantic PSNR: {:.2f},  ATE RMSE: {:.2f} cm".format(avg_psnr, avg_l1*100, avg_semantic_psnr, ate_rmse*100), y=1.05, fontsize=16)
+
+    fig.suptitle("Average PSNR: {:.2f}, Average Depth L1: {:.2f} cm,  ATE RMSE: {:.2f} cm".format(avg_psnr, avg_l1*100, ate_rmse*100), y=1.05, fontsize=16)
     plt.savefig(os.path.join(eval_dir, "metrics.png"), bbox_inches='tight')
     if wandb_run is not None:
         wandb_run.log({"Eval/Metrics": fig})

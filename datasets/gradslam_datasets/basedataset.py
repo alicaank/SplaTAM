@@ -351,37 +351,37 @@ class GradSLAMDataset(torch.utils.data.Dataset):
             # self.retained_inds[index].item(),
         )
         
-    def get_language_feature(self, language_feature_dir, feature_level, index):
+    def get_language_feature(self, feature_level, index):
         seg_map = torch.from_numpy(np.load(self.language_seg_paths[index]))
         feature_map = torch.from_numpy(np.load(self.language_feat_paths[index]))
         
         # elif str(language_feature_name).split('.')[-1] == 'pkl':
         #     with open(language_feature_name, 'rb') as f:
         #         data = pickle.load(f)
-        #     seg_map = data['seg_maps']
+        #     seg_map = data['seg_maps']self.orig_height
         #     feature_tensor = data['feature']
         # print(seg_map.shape, feature_tensor.shape)torch.Size([4, 832, 1264]) torch.Size([391, 512])
         # feature_map = torch.zeros(512, self.image_height, self.image_width)
-        y, x = torch.meshgrid(torch.arange(0, self.image_height), torch.arange(0, self.image_width))
+        y, x = torch.meshgrid(torch.arange(0, self.orig_height), torch.arange(0, self.orig_width))
         x = x.reshape(-1, 1)
         y = y.reshape(-1, 1)
         seg = seg_map[:, y, x].squeeze(-1).long()
         mask = seg != -1
         if feature_level == 0: # default
             point_feature1 = feature_map[seg[0:1]].squeeze(0)
-            mask = mask[0:1].reshape(1, self.image_height, self.image_width)
+            mask = mask[0:1].reshape(1, self.orig_height, self.orig_width)
         elif feature_level == 1: # s
             point_feature1 = feature_map[seg[1:2]].squeeze(0)
-            mask = mask[1:2].reshape(1, self.image_height, self.image_width)
+            mask = mask[1:2].reshape(1, self.orig_height, self.orig_width)
         elif feature_level == 2: # m
             point_feature1 = feature_map[seg[2:3]].squeeze(0)
-            mask = mask[2:3].reshape(1, self.image_height, self.image_width)
+            mask = mask[2:3].reshape(1, self.orig_height, self.orig_width)
         elif feature_level == 3: # l
             point_feature1 = feature_map[seg[3:4]].squeeze(0)
-            mask = mask[3:4].reshape(1, self.image_height, self.image_width)
+            mask = mask[3:4].reshape(1, self.orig_height, self.orig_width)
         else:
             raise ValueError("feature_level=", feature_level)
         # point_feature = torch.cat((point_feature2, point_feature3, point_feature4), dim=-1).to('cuda')
-        point_feature = point_feature1.reshape(self.image_height, self.image_width, -1).permute(2, 0, 1)
+        point_feature = point_feature1.reshape(self.orig_height, self.orig_width, -1).permute(2, 0, 1)
        
         return point_feature.cuda(), mask.cuda()

@@ -74,7 +74,8 @@ def load_scene_data(scene_path, first_frame_w2c, intrinsics):
     print(params.keys())
     rendervar = {
         'means3D': params['means3D'],
-        'colors_precomp': params['semantic_colors'],
+        'colors_precomp': params['rgb_colors'],
+        'language_feature_precomp': params['language_feature'],
         'rotations': torch.nn.functional.normalize(params['unnorm_rotations']),
         'opacities': torch.sigmoid(params['logit_opacities']),
         'scales': torch.exp(log_scales),
@@ -83,6 +84,7 @@ def load_scene_data(scene_path, first_frame_w2c, intrinsics):
     depth_rendervar = {
         'means3D': params['means3D'],
         'colors_precomp': get_depth_and_silhouette(params['means3D'], first_frame_w2c),
+        'language_feature_precomp': params['language_feature'],
         'rotations': torch.nn.functional.normalize(params['unnorm_rotations']),
         'opacities': torch.sigmoid(params['logit_opacities']),
         'scales': torch.exp(log_scales),
@@ -119,13 +121,14 @@ def render(w2c, k, timestep_data, timestep_depth_data, cfg):
             projmatrix=cam.projmatrix,
             sh_degree=cam.sh_degree,
             campos=cam.campos,
-            prefiltered=cam.prefiltered
+            prefiltered=cam.prefiltered,
+            include_feature=True
         )
-        im, _, depth, = Renderer(raster_settings=white_bg_cam)(**timestep_data)
-        depth_sil, _, _, = Renderer(raster_settings=cam)(**timestep_depth_data)
+        im, language_feature, _, depth, = Renderer(raster_settings=white_bg_cam)(**timestep_data)
+        depth_sil, _, _, _, = Renderer(raster_settings=cam)(**timestep_depth_data)
         differentiable_depth = depth_sil[0, :, :].unsqueeze(0)
         sil = depth_sil[1, :, :].unsqueeze(0)
-        return im, depth, sil
+        return language_feature, depth, sil
 
 
 def rgbd2pcd(color, depth, w2c, intrinsics, cfg):
