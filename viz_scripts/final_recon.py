@@ -75,7 +75,7 @@ def load_scene_data(scene_path, first_frame_w2c, intrinsics):
     rendervar = {
         'means3D': params['means3D'],
         'colors_precomp': params['rgb_colors'],
-        'language_feature_precomp': params['language_feature'],
+        'language_feature_precomp': (params['language_feature'] * 255).round(),
         'rotations': torch.nn.functional.normalize(params['unnorm_rotations']),
         'opacities': torch.sigmoid(params['logit_opacities']),
         'scales': torch.exp(log_scales),
@@ -84,7 +84,7 @@ def load_scene_data(scene_path, first_frame_w2c, intrinsics):
     depth_rendervar = {
         'means3D': params['means3D'],
         'colors_precomp': get_depth_and_silhouette(params['means3D'], first_frame_w2c),
-        'language_feature_precomp': params['language_feature'],
+        'language_feature_precomp': (params['language_feature'] * 255).round(),
         'rotations': torch.nn.functional.normalize(params['unnorm_rotations']),
         'opacities': torch.sigmoid(params['logit_opacities']),
         'scales': torch.exp(log_scales),

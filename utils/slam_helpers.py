@@ -113,7 +113,7 @@ def params2rendervar(params):
     rendervar = {
         'means3D': params['means3D'],
         'colors_precomp': params['rgb_colors'],
-        'language_feature_precomp': params['language_feature'], 
+        'language_feature_precomp': (params['language_feature'] * 255).round(), 
         'rotations': F.normalize(params['unnorm_rotations']),
         'opacities': torch.sigmoid(params['logit_opacities']),
         'scales': torch.exp(log_scales),
@@ -132,7 +132,7 @@ def transformed_params2rendervar(params, transformed_gaussians):
     rendervar = {
         'means3D': transformed_gaussians['means3D'],
         'colors_precomp': params['rgb_colors'],
-        'language_feature_precomp': params['language_feature'], 
+        'language_feature_precomp': (params['language_feature'] * 255).round(), 
         'rotations': F.normalize(transformed_gaussians['unnorm_rotations']),
         'opacities': torch.sigmoid(params['logit_opacities']),
         'scales': torch.exp(log_scales),
@@ -151,7 +151,7 @@ def transformed_semanticparams2rendervar(params, transformed_gaussians):
     rendervar = {
         'means3D': transformed_gaussians['means3D'],
         'colors_precomp': params['semantic_colors'],
-        'language_feature_precomp': params['language_feature'], 
+        'language_feature_precomp': (params['language_feature'] * 255).round(), 
         'rotations': F.normalize(transformed_gaussians['unnorm_rotations']),
         'opacities': torch.sigmoid(params['logit_opacities']),
         'scales': torch.exp(log_scales),
@@ -169,7 +169,7 @@ def transformed_languageparams2rendervar(params, transformed_gaussians):
     rendervar = {
         'means3D': transformed_gaussians['means3D'],
         'colors_precomp': params['rgb_colors'],
-        'language_feature_precomp': params['language_feature'], 
+        'language_feature_precomp': (params['language_feature'] * 255).round(), 
         'rotations': F.normalize(transformed_gaussians['unnorm_rotations']),
         'opacities': torch.sigmoid(params['logit_opacities']),
         'scales': torch.exp(log_scales),
@@ -280,7 +280,7 @@ def transformed_params2depthplussilhouette(params, w2c, transformed_gaussians):
     rendervar = {
         'means3D': transformed_gaussians['means3D'],
         'colors_precomp': get_depth_and_silhouette(transformed_gaussians['means3D'], w2c),
-        'language_feature_precomp': params['language_feature'], 
+        'language_feature_precomp': (params['language_feature'] * 255).round(), 
         'rotations': F.normalize(transformed_gaussians['unnorm_rotations']),
         'opacities': torch.sigmoid(params['logit_opacities']),
         'scales': torch.exp(log_scales),

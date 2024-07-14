@@ -481,12 +481,10 @@ def add_new_gaussians(params, variables, curr_data, sil_thres,
         new_pt_cld, mean3_sq_dist = get_pointcloud(curr_data['im'], curr_data['depth'], curr_data['semantic'], curr_data['intrinsics'], 
                                         curr_w2c, mask=non_presence_mask, compute_mean_sq_dist=True,
                                         mean_sq_dist_method=mean_sq_dist_method, language_features = curr_data['gt_language_feature'])
-        if time_idx % 5 == 0:
-            # print("Add with new GT")
-            new_params = initialize_new_params(new_pt_cld, mean3_sq_dist, gaussian_distribution, curr_data['gt_language_feature'])
+        # print("Add with new GT")
+        new_params = initialize_new_params(new_pt_cld, mean3_sq_dist, gaussian_distribution, curr_data['gt_language_feature'])
 
-        else:
-            new_params = initialize_new_params(new_pt_cld, mean3_sq_dist, gaussian_distribution, curr_data['gt_language_feature'])
+        
             
         for k, v in new_params.items():
             # print(k)
@@ -614,7 +612,7 @@ def rgbd_slam(config: dict):
         ignore_bad=dataset_config["ignore_bad"],
         use_train_split=dataset_config["use_train_split"],
     )
-    num_frames = 10
+    num_frames = dataset_config["num_frames"]
     if num_frames == -1:
         num_frames = len(dataset)
     # Init seperate dataloader for densification if required
@@ -743,9 +741,9 @@ def rgbd_slam(config: dict):
         curr_data = {}
         
         # Initialize Mapping Data for selected frame
-        if time_idx % 5 == 0:
-            # print("Get new GT")
-            gt_language_feature, language_feature_mask = dataset.get_language_feature(3, time_idx)
+       
+        # print("Get new GT")
+        gt_language_feature, language_feature_mask = dataset.get_language_feature(3, time_idx)
         
         # print("GT Size Index: ", time_idx)
         # print(gt_language_feature.shape)
@@ -935,9 +933,8 @@ def rgbd_slam(config: dict):
                     iter_color = color
                     iter_semantic = semantic
                     iter_depth = depth
-                    if time_idx % 5 == 0:
-                        iter_language = gt_language_feature
-                        iter_language_feature_mask = language_feature_mask
+                    iter_language = gt_language_feature
+                    iter_language_feature_mask = language_feature_mask
                 else:
                     # Use Keyframe Data
                     iter_time_idx = keyframe_list[selected_rand_keyframe_idx]['id']
@@ -945,8 +942,7 @@ def rgbd_slam(config: dict):
                     iter_semantic = keyframe_list[selected_rand_keyframe_idx]['semantic']
                     iter_depth = keyframe_list[selected_rand_keyframe_idx]['depth']
                     
-                    if selected_rand_keyframe_idx % 5 == 0:
-                        iter_language, iter_language_feature_mask = dataset.get_language_feature(3, selected_rand_keyframe_idx)
+                    iter_language, iter_language_feature_mask = dataset.get_language_feature(3, selected_rand_keyframe_idx)
                     
                 iter_gt_w2c = gt_w2c_all_frames[:iter_time_idx+1]
                 iter_data = {'cam': cam, 'im': iter_color, 'depth': iter_depth, 'semantic' : iter_semantic, 'id': iter_time_idx, 
