@@ -136,22 +136,39 @@ def cat_params_to_optimizer(new_params, params, optimizer):
     return params
 
 
-def remove_points(to_remove, params, variables, optimizer):
+def remove_points(to_remove, params, variables, optimizer, include_feature = True):
     to_keep = ~to_remove
     keys = [k for k in params.keys() if k not in ['cam_unnorm_rots', 'cam_trans']]
     for k in keys:
-        group = [g for g in optimizer.param_groups if g['name'] == k][0]
-        stored_state = optimizer.state.get(group['params'][0], None)
-        if stored_state is not None:
-            stored_state["exp_avg"] = stored_state["exp_avg"][to_keep]
-            stored_state["exp_avg_sq"] = stored_state["exp_avg_sq"][to_keep]
-            del optimizer.state[group['params'][0]]
-            group["params"][0] = torch.nn.Parameter((group["params"][0][to_keep].requires_grad_(True)))
-            optimizer.state[group['params'][0]] = stored_state
-            params[k] = group["params"][0]
+        if include_feature:
+            group = [g for g in optimizer.param_groups if g['name'] == k][0]
+            stored_state = optimizer.state.get(group['params'][0], None)
+            if stored_state is not None:
+                stored_state["exp_avg"] = stored_state["exp_avg"][to_keep]
+                stored_state["exp_avg_sq"] = stored_state["exp_avg_sq"][to_keep]
+                del optimizer.state[group['params'][0]]
+                group["params"][0] = torch.nn.Parameter((group["params"][0][to_keep].requires_grad_(True)))
+                optimizer.state[group['params'][0]] = stored_state
+                params[k] = group["params"][0]
+            else:
+                group["params"][0] = torch.nn.Parameter(group["params"][0][to_keep].requires_grad_(True))
+                params[k] = group["params"][0]
         else:
-            group["params"][0] = torch.nn.Parameter(group["params"][0][to_keep].requires_grad_(True))
-            params[k] = group["params"][0]
+            if k == "language_feature":
+                continue
+            else:
+                group = [g for g in optimizer.param_groups if g['name'] == k][0]
+                stored_state = optimizer.state.get(group['params'][0], None)
+                if stored_state is not None:
+                    stored_state["exp_avg"] = stored_state["exp_avg"][to_keep]
+                    stored_state["exp_avg_sq"] = stored_state["exp_avg_sq"][to_keep]
+                    del optimizer.state[group['params'][0]]
+                    group["params"][0] = torch.nn.Parameter((group["params"][0][to_keep].requires_grad_(True)))
+                    optimizer.state[group['params'][0]] = stored_state
+                    params[k] = group["params"][0]
+                else:
+                    group["params"][0] = torch.nn.Parameter(group["params"][0][to_keep].requires_grad_(True))
+                    params[k] = group["params"][0]   
     variables['means2D_gradient_accum'] = variables['means2D_gradient_accum'][to_keep]
     variables['denom'] = variables['denom'][to_keep]
     variables['max_2D_radius'] = variables['max_2D_radius'][to_keep]

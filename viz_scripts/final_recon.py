@@ -71,7 +71,6 @@ def load_scene_data(scene_path, first_frame_w2c, intrinsics):
         log_scales = torch.tile(params['log_scales'], (1, 3))
     else:
         log_scales = params['log_scales']
-    print(params.keys())
     rendervar = {
         'means3D': params['means3D'],
         'colors_precomp': params['rgb_colors'],
@@ -128,7 +127,8 @@ def render(w2c, k, timestep_data, timestep_depth_data, cfg):
         depth_sil, _, _, _, = Renderer(raster_settings=cam)(**timestep_depth_data)
         differentiable_depth = depth_sil[0, :, :].unsqueeze(0)
         sil = depth_sil[1, :, :].unsqueeze(0)
-        return language_feature, depth, sil
+           
+        return im, depth, sil
 
 
 def rgbd2pcd(color, depth, w2c, intrinsics, cfg):

@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from tqdm import tqdm
 import numpy as np
 import matplotlib.pyplot as plt
+from diff_gaussian_rasterization import GaussianRasterizationSettings as Camera
 
 from datasets.gradslam_datasets.geometryutils import relative_transformation
 from utils.recon_helpers import setup_camera
@@ -151,7 +152,7 @@ def plot_rgbd_silhouette(color, depth, rastered_color, rastered_depth, presence_
 
 def report_progress(params, data, i, progress_bar, iter_time_idx, sil_thres, every_i=1, qual_every_i=1, 
                     tracking=False, mapping=False, wandb_run=None, wandb_step=None, wandb_save_qual=False, online_time_idx=None,
-                    global_logging=True):
+                    global_logging=True, include_feature = True):
     if i % every_i == 0 or i == 1:
         if wandb_run is not None:
             if tracking:
@@ -213,17 +214,31 @@ def report_progress(params, data, i, progress_bar, iter_time_idx, sil_thres, eve
                                                    camera_grad=False)
 
         # Initialize Render Variables
-        rendervar = transformed_params2rendervar(params, transformed_gaussians)
+        rendervar = transformed_params2rendervar(params, transformed_gaussians, include_feature)
 
         depth_sil_rendervar = transformed_params2depthplussilhouette(params, data['w2c'], 
                                                                      transformed_gaussians)
-        depth_sil, _, _, _, = Renderer(raster_settings=data['cam'])(**depth_sil_rendervar)
+        tracking_cam = Camera(
+        data["cam"].image_height,
+        data["cam"].image_width,
+        tanfovx=data["cam"].tanfovx,
+        tanfovy=data["cam"].tanfovy,
+        bg=data["cam"].bg,
+        scale_modifier=data["cam"].scale_modifier,
+        viewmatrix=data["cam"].viewmatrix,
+        projmatrix=data["cam"].projmatrix,
+        sh_degree=data["cam"].sh_degree,
+        campos=data["cam"].campos,
+        prefiltered=data["cam"].prefiltered,
+        include_feature=False)
+        
+        depth_sil, _, _, _, = Renderer(raster_settings=tracking_cam)(**depth_sil_rendervar)
         rastered_depth = depth_sil[0, :, :].unsqueeze(0)
         valid_depth_mask = (data['depth'] > 0)
         silhouette = depth_sil[1, :, :]
         presence_sil_mask = (silhouette > sil_thres)
 
-        im, _, _, _, = Renderer(raster_settings=data['cam'])(**rendervar)
+        im, language_feature, _, _, = Renderer(raster_settings=data['cam'])(**rendervar)
         if tracking:
             psnr = calc_psnr(im * presence_sil_mask, data['im'] * presence_sil_mask).mean()
         else:
@@ -318,16 +333,29 @@ def eval_online(dataset, all_params, num_frames, eval_online_dir, sil_thres,
         rendervar = transformed_params2rendervar(params, transformed_gaussians)
         depth_sil_rendervar = transformed_params2depthplussilhouette(params, first_frame_w2c,
                                                                      transformed_gaussians)
-        
+        tracking_cam = Camera(
+        curr_data["cam"].image_height,
+        curr_data["cam"].image_width,
+        tanfovx=curr_data["cam"].tanfovx,
+        tanfovy=curr_data["cam"].tanfovy,
+        bg=curr_data["cam"].bg,
+        scale_modifier=curr_data["cam"].scale_modifier,
+        viewmatrix=curr_data["cam"].viewmatrix,
+        projmatrix=curr_data["cam"].projmatrix,
+        sh_degree=curr_data["cam"].sh_degree,
+        campos=curr_data["cam"].campos,
+        prefiltered=curr_data["cam"].prefiltered,
+        include_feature=False
+    )
         # Render Depth & Silhouette
-        depth_sil, _, _, = Renderer(raster_settings=curr_data['cam'])(**depth_sil_rendervar)
+        depth_sil, _, _, = Renderer(raster_settings=tracking_cam)(**depth_sil_rendervar)
         rastered_depth = depth_sil[0, :, :].unsqueeze(0)
         valid_depth_mask = (curr_data['depth'] > 0)
         silhouette = depth_sil[1, :, :]
         presence_sil_mask = (silhouette > sil_thres)
         
         # Render RGB and Calculate PSNR
-        im, radius, _, = Renderer(raster_settings=curr_data['cam'])(**rendervar)
+        im, _,radius, _, = Renderer(raster_settings=curr_data['cam'])(**rendervar)
         if mapping_iters==0 and not add_new_gaussians:
             psnr = calc_psnr(im * presence_sil_mask, curr_data['im'] * presence_sil_mask).mean()
         else:
@@ -446,7 +474,6 @@ def eval(dataset, final_params, num_frames, eval_dir, sil_thres,
             first_frame_w2c = torch.linalg.inv(pose)
             # Setup Camera
             cam = setup_camera(color.shape[2], color.shape[1], intrinsics.cpu().numpy(), first_frame_w2c.detach().cpu().numpy())
-        
         # Skip frames if not eval_every
         if time_idx != 0 and (time_idx+1) % eval_every != 0:
             continue
@@ -460,14 +487,26 @@ def eval(dataset, final_params, num_frames, eval_dir, sil_thres,
         curr_data = {'cam': cam, 'im': color, 'depth': depth, 'semantic': semantic, 'id': time_idx, 'intrinsics': intrinsics, 'w2c': first_frame_w2c}
 
         # Initialize Render Variables
-        rendervar = transformed_params2rendervar(final_params, transformed_gaussians)
+        rendervar = transformed_params2rendervar(final_params, transformed_gaussians, include_feature = True)
         
         depth_sil_rendervar = transformed_params2depthplussilhouette(final_params, curr_data['w2c'],
                                                                      transformed_gaussians)
         # semantic_rendervar = transformed_semanticparams2rendervar(final_params, transformed_gaussians)
-
+        tracking_cam = Camera(
+        cam.image_height,
+        cam.image_width,
+        tanfovx=cam.tanfovx,
+        tanfovy=cam.tanfovy,
+        bg=cam.bg,
+        scale_modifier=cam.scale_modifier,
+        viewmatrix=cam.viewmatrix,
+        projmatrix=cam.projmatrix,
+        sh_degree=cam.sh_degree,
+        campos=cam.campos,
+        prefiltered=cam.prefiltered,
+        include_feature=False)
         # Render Depth & Silhouette
-        depth_sil, _, _, _, = Renderer(raster_settings=curr_data['cam'])(**depth_sil_rendervar)
+        depth_sil, _, _, _, = Renderer(raster_settings=tracking_cam)(**depth_sil_rendervar)
         rastered_depth = depth_sil[0, :, :].unsqueeze(0)
         # Mask invalid depth in GT
         valid_depth_mask = (curr_data['depth'] > 0)
