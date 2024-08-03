@@ -11,7 +11,7 @@ from datasets.gradslam_datasets.geometryutils import relative_transformation
 from utils.recon_helpers import setup_camera
 from utils.slam_external import build_rotation, calc_psnr
 from utils.slam_helpers import (
-    transform_to_frame, transformed_params2rendervar, transformed_params2depthplussilhouette, transformed_semanticparams2rendervar,
+    transform_to_frame, transformed_params2rendervar, transformed_params2depthplussilhouette,
     quat_mult, matrix_to_quaternion
 )
 
@@ -109,34 +109,55 @@ def report_loss(losses, wandb_run, wandb_step, tracking=False, mapping=False):
 
 def plot_rgbd_silhouette(color, depth, rastered_color, rastered_depth, presence_sil_mask, diff_depth_l1,
                          psnr, depth_l1, fig_title, plot_dir=None, plot_name=None, 
-                         save_plot=False, wandb_run=None, wandb_step=None, wandb_title=None, diff_rgb=None):
+                         save_plot=False, wandb_run=None, wandb_step=None, wandb_title=None, 
+                         diff_rgb=None, rastered_language=None, gt_language=None):
     # Determine Plot Aspect Ratio
     aspect_ratio = color.shape[2] / color.shape[1]
     fig_height = 8
     fig_width = 14/1.55
     fig_width = fig_width * aspect_ratio
-    # Plot the Ground Truth and Rasterized RGB & Depth, along with Diff Depth & Silhouette
-    fig, axs = plt.subplots(2, 3, figsize=(fig_width, fig_height))
+    # Extend the layout to accommodate the new subplots
+    fig, axs = plt.subplots(3, 3, figsize=(fig_width, fig_height)) 
+    # Plot Ground Truth RGB
     axs[0, 0].imshow(color.cpu().permute(1, 2, 0))
-    axs[0, 0].set_title("Ground Truth RGB")
+    axs[0, 0].set_title("Ground Truth RGB") 
+    # Plot Ground Truth Depth
     axs[0, 1].imshow(depth[0, :, :].cpu(), cmap='jet', vmin=0, vmax=6)
     axs[0, 1].set_title("Ground Truth Depth")
+    # Plot Rasterized RGB
     rastered_color = torch.clamp(rastered_color, 0, 1)
     axs[1, 0].imshow(rastered_color.cpu().permute(1, 2, 0))
-    axs[1, 0].set_title("Rasterized RGB, PSNR: {:.2f}".format(psnr))
+    axs[1, 0].set_title("Rasterized RGB, PSNR: {:.2f}".format(psnr))  
+    # Plot Rasterized Depth
     axs[1, 1].imshow(rastered_depth[0, :, :].cpu(), cmap='jet', vmin=0, vmax=6)
-    axs[1, 1].set_title("Rasterized Depth, L1: {:.2f}".format(depth_l1))
+    axs[1, 1].set_title("Rasterized Depth, L1: {:.2f}".format(depth_l1))  
+    # Plot Diff RGB L1 or Rasterized Silhouette
     if diff_rgb is not None:
         axs[0, 2].imshow(diff_rgb.cpu(), cmap='jet', vmin=0, vmax=6)
         axs[0, 2].set_title("Diff RGB L1")
     else:
         axs[0, 2].imshow(presence_sil_mask, cmap='gray')
         axs[0, 2].set_title("Rasterized Silhouette")
+    # Plot Diff Depth L1
     diff_depth_l1 = diff_depth_l1.cpu().squeeze(0)
     axs[1, 2].imshow(diff_depth_l1, cmap='jet', vmin=0, vmax=6)
     axs[1, 2].set_title("Diff Depth L1")
+    
+    # Plot Ground Truth Language
+    if gt_language is not None:
+        axs[2, 0].imshow(gt_language.cpu().permute(1, 2, 0))
+        axs[2, 0].set_title("Ground Truth Language")
+    
+    # Plot Rasterized Language
+    if rastered_language is not None:
+        rastered_language = torch.clamp(rastered_language, 0, 1)
+        axs[2, 1].imshow(rastered_language.cpu().permute(1, 2, 0))
+        axs[2, 1].set_title("Rasterized Language")
+    
+    # Hide the last subplot if not needed
+    axs[2, 2].axis('off') 
     for ax in axs.flatten():
-        ax.axis('off')
+        ax.axis('off') 
     fig.suptitle(fig_title, y=0.95, fontsize=16)
     fig.tight_layout()
     if save_plot:
@@ -215,24 +236,12 @@ def report_progress(params, data, i, progress_bar, iter_time_idx, sil_thres, eve
 
         # Initialize Render Variables
         rendervar = transformed_params2rendervar(params, transformed_gaussians, include_feature)
+        
 
         depth_sil_rendervar = transformed_params2depthplussilhouette(params, data['w2c'], 
-                                                                     transformed_gaussians)
-        tracking_cam = Camera(
-        data["cam"].image_height,
-        data["cam"].image_width,
-        tanfovx=data["cam"].tanfovx,
-        tanfovy=data["cam"].tanfovy,
-        bg=data["cam"].bg,
-        scale_modifier=data["cam"].scale_modifier,
-        viewmatrix=data["cam"].viewmatrix,
-        projmatrix=data["cam"].projmatrix,
-        sh_degree=data["cam"].sh_degree,
-        campos=data["cam"].campos,
-        prefiltered=data["cam"].prefiltered,
-        include_feature=False)
+                                                                     transformed_gaussians, include_feature)
         
-        depth_sil, _, _, _, = Renderer(raster_settings=tracking_cam)(**depth_sil_rendervar)
+        depth_sil, _, _, _, = Renderer(raster_settings=data["cam"])(**depth_sil_rendervar)
         rastered_depth = depth_sil[0, :, :].unsqueeze(0)
         valid_depth_mask = (data['depth'] > 0)
         silhouette = depth_sil[1, :, :]
@@ -242,7 +251,7 @@ def report_progress(params, data, i, progress_bar, iter_time_idx, sil_thres, eve
         if tracking:
             psnr = calc_psnr(im * presence_sil_mask, data['im'] * presence_sil_mask).mean()
         else:
-            psnr = calc_psnr(im, data['im']).mean()
+            psnr = calc_psnr(im, data['im']).mean()  
 
         if tracking:
             diff_depth_rmse = torch.sqrt((((rastered_depth - data['depth']) * presence_sil_mask) ** 2))
@@ -289,7 +298,7 @@ def report_progress(params, data, i, progress_bar, iter_time_idx, sil_thres, eve
                 fig_title = f"Time-Step: {online_time_idx} | Iter: {i} | Frame: {data['id']}"
             plot_rgbd_silhouette(data['im'], data['depth'], im, rastered_depth, presence_sil_mask, diff_depth_l1,
                                  psnr, depth_l1, fig_title, wandb_run=wandb_run, wandb_step=wandb_step, 
-                                 wandb_title=f"{stage} Qual Viz")
+                                 wandb_title=f"{stage} Qual Viz", rastered_language = language_feature, gt_language = data['gt_language_feature'])
 
 
 def eval_online(dataset, all_params, num_frames, eval_online_dir, sil_thres,
@@ -333,22 +342,8 @@ def eval_online(dataset, all_params, num_frames, eval_online_dir, sil_thres,
         rendervar = transformed_params2rendervar(params, transformed_gaussians)
         depth_sil_rendervar = transformed_params2depthplussilhouette(params, first_frame_w2c,
                                                                      transformed_gaussians)
-        tracking_cam = Camera(
-        curr_data["cam"].image_height,
-        curr_data["cam"].image_width,
-        tanfovx=curr_data["cam"].tanfovx,
-        tanfovy=curr_data["cam"].tanfovy,
-        bg=curr_data["cam"].bg,
-        scale_modifier=curr_data["cam"].scale_modifier,
-        viewmatrix=curr_data["cam"].viewmatrix,
-        projmatrix=curr_data["cam"].projmatrix,
-        sh_degree=curr_data["cam"].sh_degree,
-        campos=curr_data["cam"].campos,
-        prefiltered=curr_data["cam"].prefiltered,
-        include_feature=False
-    )
         # Render Depth & Silhouette
-        depth_sil, _, _, = Renderer(raster_settings=tracking_cam)(**depth_sil_rendervar)
+        depth_sil, _, _, = Renderer(raster_settings=curr_data['cam'])(**depth_sil_rendervar)
         rastered_depth = depth_sil[0, :, :].unsqueeze(0)
         valid_depth_mask = (curr_data['depth'] > 0)
         silhouette = depth_sil[1, :, :]
@@ -459,14 +454,15 @@ def eval(dataset, final_params, num_frames, eval_dir, sil_thres,
     gt_w2c_list = []
     for time_idx in tqdm(range(num_frames)):
          # Get RGB-D Data & Camera Parameters
-        color, depth, semantic, intrinsics, pose = dataset[time_idx]
+        color, depth, intrinsics, pose = dataset[time_idx] 
+        gt_language, _ = dataset.get_language_feature(3, time_idx)
+        
         gt_w2c = torch.linalg.inv(pose)
         gt_w2c_list.append(gt_w2c)
         intrinsics = intrinsics[:3, :3]
 
         # Process RGB-D Data
         color = color.permute(2, 0, 1) / 255 # (H, W, C) -> (C, H, W)
-        semantic = semantic.permute(2, 0, 1) / 255 # (H, W, C) -> (C, H, W)
         depth = depth.permute(2, 0, 1) # (H, W, C) -> (C, H, W)
 
         if time_idx == 0:
@@ -484,29 +480,15 @@ def eval(dataset, final_params, num_frames, eval_dir, sil_thres,
                                                    camera_grad=False)
  
         # Define current frame data
-        curr_data = {'cam': cam, 'im': color, 'depth': depth, 'semantic': semantic, 'id': time_idx, 'intrinsics': intrinsics, 'w2c': first_frame_w2c}
+        curr_data = {'cam': cam, 'im': color, 'depth': depth, 'id': time_idx, 'intrinsics': intrinsics, 'w2c': first_frame_w2c}
 
         # Initialize Render Variables
         rendervar = transformed_params2rendervar(final_params, transformed_gaussians, include_feature = True)
         
         depth_sil_rendervar = transformed_params2depthplussilhouette(final_params, curr_data['w2c'],
-                                                                     transformed_gaussians)
-        # semantic_rendervar = transformed_semanticparams2rendervar(final_params, transformed_gaussians)
-        tracking_cam = Camera(
-        cam.image_height,
-        cam.image_width,
-        tanfovx=cam.tanfovx,
-        tanfovy=cam.tanfovy,
-        bg=cam.bg,
-        scale_modifier=cam.scale_modifier,
-        viewmatrix=cam.viewmatrix,
-        projmatrix=cam.projmatrix,
-        sh_degree=cam.sh_degree,
-        campos=cam.campos,
-        prefiltered=cam.prefiltered,
-        include_feature=False)
+                                                                     transformed_gaussians, include_feature = True)
         # Render Depth & Silhouette
-        depth_sil, _, _, _, = Renderer(raster_settings=tracking_cam)(**depth_sil_rendervar)
+        depth_sil, _, _, _, = Renderer(raster_settings=curr_data['cam'])(**depth_sil_rendervar)
         rastered_depth = depth_sil[0, :, :].unsqueeze(0)
         # Mask invalid depth in GT
         valid_depth_mask = (curr_data['depth'] > 0)
@@ -516,7 +498,7 @@ def eval(dataset, final_params, num_frames, eval_dir, sil_thres,
         presence_sil_mask = (silhouette > sil_thres)
         
         # Render RGB and Calculate PSNR
-        im, _, radius, _, = Renderer(raster_settings=curr_data['cam'])(**rendervar)
+        im, randered_language, radius, _, = Renderer(raster_settings=curr_data['cam'])(**rendervar)
         if mapping_iters==0 and not add_new_gaussians:
             weighted_im = im * presence_sil_mask * valid_depth_mask
             weighted_gt_im = curr_data['im'] * presence_sil_mask * valid_depth_mask
@@ -532,25 +514,6 @@ def eval(dataset, final_params, num_frames, eval_dir, sil_thres,
         psnr_list.append(psnr.cpu().numpy())
         ssim_list.append(ssim.cpu().numpy())
         lpips_list.append(lpips_score)
-        
-
-        # Render Semantic and Calculate PSNR
-        # semantic_im, radius, _, = Renderer(raster_settings=curr_data['cam'])(**semantic_rendervar)
-        # if mapping_iters==0 and not add_new_gaussians:
-        #     weighted_im = semantic_im * presence_sil_mask * valid_depth_mask
-        #     weighted_gt_im = curr_data['semantic'] * presence_sil_mask * valid_depth_mask
-        # else:
-        #     weighted_im = semantic_im * valid_depth_mask
-        #     weighted_gt_im = curr_data['semantic'] * valid_depth_mask
-        # psnr_semantic = calc_psnr(weighted_im, weighted_gt_im).mean()
-        # ssim_semantic = ms_ssim(weighted_im.unsqueeze(0).cpu(), weighted_gt_im.unsqueeze(0).cpu(), 
-        #                 data_range=1.0, size_average=True)
-        # lpips_score_semantic = loss_fn_alex(torch.clamp(weighted_im.unsqueeze(0), 0.0, 1.0),
-        #                             torch.clamp(weighted_gt_im.unsqueeze(0), 0.0, 1.0)).item()
-
-        # psnr_semantic_list.append(psnr_semantic.cpu().numpy())
-        # ssim_semantic_list.append(ssim_semantic.cpu().numpy())
-        # lpips_semantic_list.append(lpips_score_semantic)
 
         # Compute Depth RMSE
         if mapping_iters==0 and not add_new_gaussians:
@@ -598,7 +561,7 @@ def eval(dataset, final_params, num_frames, eval_dir, sil_thres,
         if wandb_run is None:
             plot_rgbd_silhouette(color, depth, im, rastered_depth_viz, presence_sil_mask, diff_depth_l1,
                                  psnr, depth_l1, fig_title, plot_dir, 
-                                 plot_name=plot_name, save_plot=True)
+                                 plot_name=plot_name, save_plot=True, rastered_language = randered_language, gt_language = gt_language )
         elif wandb_save_qual:
             plot_rgbd_silhouette(color, depth, im, rastered_depth_viz, presence_sil_mask, diff_depth_l1,
                                  psnr, depth_l1, fig_title, plot_dir, 
@@ -640,29 +603,20 @@ def eval(dataset, final_params, num_frames, eval_dir, sil_thres,
     
     # Compute Average Metrics
     psnr_list = np.array(psnr_list)
-    # psnr_semantic_list = np.array(psnr_semantic_list)
     rmse_list = np.array(rmse_list)
     l1_list = np.array(l1_list)
     ssim_list = np.array(ssim_list)
-    # ssim_semantic_list = np.array(ssim_semantic_list)
     lpips_list = np.array(lpips_list)
-    # lpips_semantic_list = np.array(lpips_semantic_list)
     avg_psnr = psnr_list.mean()
-    # avg_semantic_psnr = psnr_semantic_list.mean()
     avg_rmse = rmse_list.mean()
     avg_l1 = l1_list.mean()
     avg_ssim = ssim_list.mean()
     avg_lpips = lpips_list.mean()
-    # avg_semantic_ssim = ssim_semantic_list.mean()
-    # avg_semantic_lpips = lpips_semantic_list.mean()
     print("Average PSNR: {:.2f}".format(avg_psnr))
-    # print("Average Semantic PSNR: {:.2f}".format(avg_semantic_psnr))
     print("Average Depth RMSE: {:.2f} cm".format(avg_rmse*100))
     print("Average Depth L1: {:.2f} cm".format(avg_l1*100))
     print("Average MS-SSIM: {:.3f}".format(avg_ssim))
     print("Average LPIPS: {:.3f}".format(avg_lpips))
-    # print("Average Semantic MS-SSIM: {:.3f}".format(avg_semantic_ssim))
-    # print("Average Semantic LPIPS: {:.3f}".format(avg_semantic_lpips))
 
     if wandb_run is not None:
         wandb_run.log({"Final Stats/Average PSNR": avg_psnr, 
@@ -674,14 +628,11 @@ def eval(dataset, final_params, num_frames, eval_dir, sil_thres,
 
     # Save metric lists as text files
     np.savetxt(os.path.join(eval_dir, "psnr.txt"), psnr_list)
-    # np.savetxt(os.path.join(eval_dir, "psnr_semantic.txt"), psnr_semantic_list)
 
     np.savetxt(os.path.join(eval_dir, "rmse.txt"), rmse_list)
     np.savetxt(os.path.join(eval_dir, "l1.txt"), l1_list)
     np.savetxt(os.path.join(eval_dir, "ssim.txt"), ssim_list)
     np.savetxt(os.path.join(eval_dir, "lpips.txt"), lpips_list)
-    # np.savetxt(os.path.join(eval_dir, "ssim_semantic.txt"), ssim_semantic_list)
-    # np.savetxt(os.path.join(eval_dir, "lpips_semantic.txt"), lpips_semantic_list)
     # Plot PSNR & L1 as line plots
     fig, axs = plt.subplots(1, 3, figsize=(12, 4))
     axs[0].plot(np.arange(len(psnr_list)), psnr_list)

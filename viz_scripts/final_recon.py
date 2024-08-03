@@ -74,23 +74,33 @@ def load_scene_data(scene_path, first_frame_w2c, intrinsics):
     rendervar = {
         'means3D': params['means3D'],
         'colors_precomp': params['rgb_colors'],
-        'language_feature_precomp': (params['language_feature'] * 255).round(),
+        'language_feature_precomp': params['language_feature'],
         'rotations': torch.nn.functional.normalize(params['unnorm_rotations']),
         'opacities': torch.sigmoid(params['logit_opacities']),
         'scales': torch.exp(log_scales),
         'means2D': torch.zeros_like(params['means3D'], device="cuda")
     }
+    language_rendervar = {
+        'means3D': params['means3D'],
+        'colors_precomp': (params['language_feature']).round(),
+        'language_feature_precomp': params['language_feature'], 
+        'rotations': F.normalize(params['unnorm_rotations']),
+        'opacities': torch.sigmoid(params['logit_opacities']),
+        'scales': torch.exp(log_scales),
+        'means2D': torch.zeros_like(params['means3D'], requires_grad=True, device="cuda") + 0
+    }
+     
     depth_rendervar = {
         'means3D': params['means3D'],
         'colors_precomp': get_depth_and_silhouette(params['means3D'], first_frame_w2c),
-        'language_feature_precomp': (params['language_feature'] * 255).round(),
+        'language_feature_precomp': params['language_feature'],
         'rotations': torch.nn.functional.normalize(params['unnorm_rotations']),
         'opacities': torch.sigmoid(params['logit_opacities']),
         'scales': torch.exp(log_scales),
         'means2D': torch.zeros_like(params['means3D'], device="cuda")
     }
     
-    return rendervar, depth_rendervar, all_w2cs
+    return rendervar, language_rendervar, depth_rendervar, all_w2cs
 
 
 def make_lineset(all_pts, all_cols, num_lines):
@@ -106,7 +116,7 @@ def make_lineset(all_pts, all_cols, num_lines):
     return linesets
 
 
-def render(w2c, k, timestep_data, timestep_depth_data, cfg):
+def render(w2c, k, timestep_data, timestep_language_data, timestep_depth_data, cfg):
     with torch.no_grad():
         cam = setup_camera(cfg['viz_w'], cfg['viz_h'], k, w2c, cfg['viz_near'], cfg['viz_far'])
         white_bg_cam = Camera(
@@ -124,11 +134,12 @@ def render(w2c, k, timestep_data, timestep_depth_data, cfg):
             include_feature=True
         )
         im, language_feature, _, depth, = Renderer(raster_settings=white_bg_cam)(**timestep_data)
+        language_im, language_feature, _, depth, = Renderer(raster_settings=white_bg_cam)(**timestep_language_data)
         depth_sil, _, _, _, = Renderer(raster_settings=cam)(**timestep_depth_data)
         differentiable_depth = depth_sil[0, :, :].unsqueeze(0)
         sil = depth_sil[1, :, :].unsqueeze(0)
            
-        return im, depth, sil
+        return language_feature, depth, sil
 
 
 def rgbd2pcd(color, depth, w2c, intrinsics, cfg):
@@ -177,7 +188,7 @@ def visualize(scene_path, cfg):
     # Load Scene Data
     w2c, k = load_camera(cfg, scene_path)
 
-    scene_data, scene_depth_data, all_w2cs = load_scene_data(scene_path, w2c, k)
+    scene_data, scene_language_data, scene_depth_data, all_w2cs = load_scene_data(scene_path, w2c, k)
 
     # vis.create_window()
     vis = o3d.visualization.Visualizer()
@@ -185,7 +196,7 @@ def visualize(scene_path, cfg):
                       height=int(cfg['viz_h'] * cfg['view_scale']),
                       visible=True)
 
-    im, depth, sil = render(w2c, k, scene_data, scene_depth_data, cfg)
+    im, depth, sil = render(w2c, k, scene_data, scene_language_data, scene_depth_data, cfg)
     init_pts, init_cols = rgbd2pcd(im, depth, w2c, k, cfg)
     pcd = o3d.geometry.PointCloud()
     pcd.points = init_pts
@@ -258,7 +269,7 @@ def visualize(scene_path, cfg):
             pts = o3d.utility.Vector3dVector(scene_data['means3D'].contiguous().double().cpu().numpy())
             cols = o3d.utility.Vector3dVector(scene_data['colors_precomp'].contiguous().double().cpu().numpy())
         else:
-            im, depth, sil = render(w2c, k, scene_data, scene_depth_data, cfg)
+            im, depth, sil = render(w2c, k, scene_data, scene_language_data, scene_depth_data, cfg)
             if cfg['show_sil']:
                 im = (1-sil).repeat(3, 1, 1)
             pts, cols = rgbd2pcd(im, depth, w2c, k, cfg)
