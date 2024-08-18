@@ -437,7 +437,11 @@ def eval(dataset, final_params, num_frames, eval_dir, sil_thres,
     l1_list = []
     lpips_list = []
     ssim_list = []
-
+    psnr_language_list = []
+    rmse_language_list = []
+    l1_language_list = []
+    lpips_language_list = []
+    ssim_language_list = []
         
     plot_dir = os.path.join(eval_dir, "plots")
     os.makedirs(plot_dir, exist_ok=True)
@@ -514,6 +518,23 @@ def eval(dataset, final_params, num_frames, eval_dir, sil_thres,
         psnr_list.append(psnr.cpu().numpy())
         ssim_list.append(ssim.cpu().numpy())
         lpips_list.append(lpips_score)
+        
+        # Rendered Language Calculate PSNR
+        if mapping_iters==0 and not add_new_gaussians:
+            weighted_language_im = randered_language * presence_sil_mask * valid_depth_mask
+            weighted_language_gt_im = gt_language * presence_sil_mask * valid_depth_mask
+        else:
+            weighted_language_im = im * valid_depth_mask
+            weighted_language_gt_im = gt_language * valid_depth_mask
+        psnr = calc_psnr(weighted_language_im, weighted_language_gt_im).mean()
+        ssim = ms_ssim(weighted_language_im.unsqueeze(0).cpu(), weighted_language_gt_im.unsqueeze(0).cpu(), 
+                        data_range=1.0, size_average=True)
+        lpips_score = loss_fn_alex(torch.clamp(weighted_language_im.unsqueeze(0), 0.0, 1.0),
+                                    torch.clamp(weighted_language_gt_im.unsqueeze(0), 0.0, 1.0)).item()
+
+        psnr_language_list.append(psnr.cpu().numpy())
+        ssim_language_list.append(ssim.cpu().numpy())
+        lpips_language_list.append(lpips_score)
 
         # Compute Depth RMSE
         if mapping_iters==0 and not add_new_gaussians:
@@ -617,6 +638,15 @@ def eval(dataset, final_params, num_frames, eval_dir, sil_thres,
     print("Average Depth L1: {:.2f} cm".format(avg_l1*100))
     print("Average MS-SSIM: {:.3f}".format(avg_ssim))
     print("Average LPIPS: {:.3f}".format(avg_lpips))
+    psnr_language_list = np.array(psnr_language_list)
+    ssim_language_list = np.array(ssim_language_list)
+    lpips_language_list = np.array(lpips_language_list)
+    avg_language_psnr = psnr_language_list.mean()
+    avg_language_ssim = ssim_language_list.mean()
+    avg_language_lpips = lpips_language_list.mean()
+    print("Average LANGUAGE PSNR: {:.2f}".format(avg_language_psnr))
+    print("Average LANGUAGE MS-SSIM: {:.3f}".format(avg_language_ssim))
+    print("Average LANGUAGE LPIPS: {:.3f}".format(avg_language_lpips))
 
     if wandb_run is not None:
         wandb_run.log({"Final Stats/Average PSNR": avg_psnr, 
@@ -633,6 +663,10 @@ def eval(dataset, final_params, num_frames, eval_dir, sil_thres,
     np.savetxt(os.path.join(eval_dir, "l1.txt"), l1_list)
     np.savetxt(os.path.join(eval_dir, "ssim.txt"), ssim_list)
     np.savetxt(os.path.join(eval_dir, "lpips.txt"), lpips_list)
+    
+    np.savetxt(os.path.join(eval_dir, "psnr_language.txt"), psnr_language_list)
+    np.savetxt(os.path.join(eval_dir, "ssim_language.txt"), ssim_language_list)
+    np.savetxt(os.path.join(eval_dir, "lpips_language.txt"), lpips_language_list)
     # Plot PSNR & L1 as line plots
     fig, axs = plt.subplots(1, 3, figsize=(12, 4))
     axs[0].plot(np.arange(len(psnr_list)), psnr_list)
