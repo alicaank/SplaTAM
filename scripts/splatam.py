@@ -297,6 +297,11 @@ def get_loss(params, curr_data, variables, iter_time_idx, loss_weights, use_sil_
     else:
         losses['im'] = 0.8 * l1_loss_v1(im, curr_data['im']) + 0.2 * (1.0 - calc_ssim(im, curr_data['im']))      
     # Language Loss
+    
+    if include_feature and tracking and (use_sil_for_loss or ignore_outlier_depth_loss):
+        language_mask = torch.tile(mask, (3, 1, 1))
+        language_mask = language_mask.detach()
+        losses['language'] = torch.abs(language_feature - rendered_language_feature)[language_mask].sum()
     if include_feature:
         losses['language'] =  torch.abs((rendered_language_feature*language_feature_mask - language_feature*language_feature_mask)).mean()
     # Visualize the Diff Images
@@ -551,7 +556,7 @@ def rgbd_slam(config: dict):
         ignore_bad=dataset_config["ignore_bad"],
         use_train_split=dataset_config["use_train_split"],
     )
-    num_frames = 400
+    num_frames = len(dataset)
     if num_frames == -1:
         num_frames = len(dataset)
     # Init seperate dataloader for densification if required
@@ -742,7 +747,7 @@ def rgbd_slam(config: dict):
                             report_progress(params, tracking_curr_data, iter+1, progress_bar, iter_time_idx, sil_thres=config['tracking']['sil_thres'], tracking=True,
                                             wandb_run=wandb_run, wandb_step=wandb_tracking_step, wandb_save_qual=config['wandb']['save_qual'])
                         else:
-                            report_progress(params, tracking_curr_data, iter+1, progress_bar, iter_time_idx, sil_thres=config['tracking']['sil_thres'], tracking=True)
+                            report_progress(params, tracking_curr_data, iter+1, progress_bar, iter_time_idx, sil_thres=config['tracking']['sil_thres'], tracking=True, gt_language = gt_language_feature)
                     else:
                         progress_bar.update(1)
                 # Update the runtime numbers
@@ -793,7 +798,7 @@ def rgbd_slam(config: dict):
                         report_progress(params, tracking_curr_data, 1, progress_bar, iter_time_idx, sil_thres=config['tracking']['sil_thres'], tracking=True,
                                         wandb_run=wandb_run, wandb_step=wandb_time_step, wandb_save_qual=config['wandb']['save_qual'], global_logging=True)
                     else:
-                        report_progress(params, tracking_curr_data, 1, progress_bar, iter_time_idx, sil_thres=config['tracking']['sil_thres'], tracking=True)
+                        report_progress(params, tracking_curr_data, 1, progress_bar, iter_time_idx, sil_thres=config['tracking']['sil_thres'], tracking=True, gt_language = gt_language_feature)
                 progress_bar.close()
             except Exception as e:
                 ckpt_output_dir = os.path.join(config["workdir"], config["run_name"])
@@ -909,10 +914,10 @@ def rgbd_slam(config: dict):
                         if config['use_wandb']:
                             report_progress(params, iter_data, iter+1, progress_bar, iter_time_idx, sil_thres=config['mapping']['sil_thres'], 
                                             wandb_run=wandb_run, wandb_step=wandb_mapping_step, wandb_save_qual=config['wandb']['save_qual'],
-                                            mapping=True, online_time_idx=time_idx)
+                                            mapping=True, online_time_idx=time_idx, gt_language = iter_language)
                         else:
                             report_progress(params, iter_data, iter+1, progress_bar, iter_time_idx, sil_thres=config['mapping']['sil_thres'], 
-                                            mapping=True, online_time_idx=time_idx)
+                                            mapping=True, online_time_idx=time_idx, gt_language = iter_language)
                     else:
                         progress_bar.update(1)
                 # Update the runtime numbers
@@ -937,7 +942,7 @@ def rgbd_slam(config: dict):
                                             mapping=True, online_time_idx=time_idx, global_logging=True)
                         else:
                             report_progress(params, curr_data, 1, progress_bar, time_idx, sil_thres=config['mapping']['sil_thres'], 
-                                            mapping=True, online_time_idx=time_idx, include_feature = include_feature)
+                                            mapping=True, online_time_idx=time_idx, include_feature = include_feature, gt_language = iter_language)
                     progress_bar.close()
                 except:
                     ckpt_output_dir = os.path.join(config["workdir"], config["run_name"])

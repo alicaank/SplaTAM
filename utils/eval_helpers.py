@@ -173,7 +173,7 @@ def plot_rgbd_silhouette(color, depth, rastered_color, rastered_depth, presence_
 
 def report_progress(params, data, i, progress_bar, iter_time_idx, sil_thres, every_i=1, qual_every_i=1, 
                     tracking=False, mapping=False, wandb_run=None, wandb_step=None, wandb_save_qual=False, online_time_idx=None,
-                    global_logging=True, include_feature = True):
+                    global_logging=True, include_feature = True, gt_language = None):
     if i % every_i == 0 or i == 1:
         if wandb_run is not None:
             if tracking:
@@ -250,8 +250,10 @@ def report_progress(params, data, i, progress_bar, iter_time_idx, sil_thres, eve
         im, language_feature, _, _, = Renderer(raster_settings=data['cam'])(**rendervar)
         if tracking:
             psnr = calc_psnr(im * presence_sil_mask, data['im'] * presence_sil_mask).mean()
+            language_psnr =  calc_psnr(language_feature * presence_sil_mask, gt_language * presence_sil_mask).mean()  
         else:
-            psnr = calc_psnr(im, data['im']).mean()  
+            psnr = calc_psnr(im, data['im']).mean()
+            language_psnr = calc_psnr(language_feature, gt_language).mean()  
 
         if tracking:
             diff_depth_rmse = torch.sqrt((((rastered_depth - data['depth']) * presence_sil_mask) ** 2))
@@ -275,7 +277,7 @@ def report_progress(params, data, i, progress_bar, iter_time_idx, sil_thres, eve
             progress_bar.set_postfix({f"Time-Step: {iter_time_idx} | Rel Pose Error: {rel_pt_error.item():.{7}} | Pose Error: {iter_pt_error.item():.{7}} | ATE RMSE": f"{ate_rmse.item():.{7}}"})
             progress_bar.update(every_i)
         elif mapping:
-            progress_bar.set_postfix({f"Time-Step: {online_time_idx} | Frame {data['id']} | PSNR: {psnr:.{7}} | Depth RMSE: {rmse:.{7}} | L1": f"{depth_l1:.{7}}"})
+            progress_bar.set_postfix({f"Time-Step: {online_time_idx} | Frame {data['id']} | PSNR: {psnr:.{7}} | Language PSNR: {language_psnr:.{7}} | Depth RMSE: {rmse:.{7}} | L1": f"{depth_l1:.{7}}"})
             progress_bar.update(every_i)
         
         if wandb_run is not None:
@@ -473,7 +475,7 @@ def eval(dataset, final_params, num_frames, eval_dir, sil_thres,
             # Process Camera Parameters
             first_frame_w2c = torch.linalg.inv(pose)
             # Setup Camera
-            cam = setup_camera(color.shape[2], color.shape[1], intrinsics.cpu().numpy(), first_frame_w2c.detach().cpu().numpy())
+            cam = setup_camera(color.shape[2], color.shape[1], intrinsics.cpu().numpy(), first_frame_w2c.detach().cpu().numpy(), include_feature = True)
         # Skip frames if not eval_every
         if time_idx != 0 and (time_idx+1) % eval_every != 0:
             continue
@@ -524,7 +526,7 @@ def eval(dataset, final_params, num_frames, eval_dir, sil_thres,
             weighted_language_im = randered_language * presence_sil_mask * valid_depth_mask
             weighted_language_gt_im = gt_language * presence_sil_mask * valid_depth_mask
         else:
-            weighted_language_im = im * valid_depth_mask
+            weighted_language_im = randered_language * valid_depth_mask
             weighted_language_gt_im = gt_language * valid_depth_mask
         psnr = calc_psnr(weighted_language_im, weighted_language_gt_im).mean()
         ssim = ms_ssim(weighted_language_im.unsqueeze(0).cpu(), weighted_language_gt_im.unsqueeze(0).cpu(), 
@@ -657,6 +659,18 @@ def eval(dataset, final_params, num_frames, eval_dir, sil_thres,
                        "Final Stats/step": 1})
 
     # Save metric lists as text files
+    
+    with open(os.path.join(eval_dir,"final_metrics.txt"), "w") as file:
+        file.write("Final Average ATE RMSE: {:.2f} cm\n".format(ate_rmse*100))
+        file.write("Average PSNR: {:.2f}\n".format(avg_psnr))
+        file.write("Average Depth RMSE: {:.2f} cm\n".format(avg_rmse*100))
+        file.write("Average Depth L1: {:.2f} cm\n".format(avg_l1*100))
+        file.write("Average MS-SSIM: {:.3f}\n".format(avg_ssim))
+        file.write("Average LPIPS: {:.3f}\n".format(avg_lpips))
+        file.write("Average LANGUAGE PSNR: {:.2f}\n".format(avg_language_psnr))
+        file.write("Average LANGUAGE MS-SSIM: {:.3f}\n".format(avg_language_ssim))
+        file.write("Average LANGUAGE LPIPS: {:.3f}\n".format(avg_language_lpips))
+    
     np.savetxt(os.path.join(eval_dir, "psnr.txt"), psnr_list)
 
     np.savetxt(os.path.join(eval_dir, "rmse.txt"), rmse_list)
