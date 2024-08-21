@@ -27,7 +27,7 @@ class ReplicaDataset(GradSLAMDataset):
         **kwargs,
     ):
         self.input_folder = os.path.join(basedir, sequence)
-        self.pose_path = os.path.join(self.input_folder, "traj_w_cgl.txt")
+        self.pose_path = os.path.join(self.input_folder, "traj.txt")
         super().__init__(
             config_dict,
             stride=stride,
@@ -42,8 +42,8 @@ class ReplicaDataset(GradSLAMDataset):
         )
 
     def get_filepaths(self):
-        color_paths = natsorted(glob.glob(f"{self.input_folder}/rgb/rgb_*.png"))
-        depth_paths = natsorted(glob.glob(f"{self.input_folder}/depth/depth_*.png"))
+        color_paths = natsorted(glob.glob(f"{self.input_folder}/results/frame*.jpg"))
+        depth_paths = natsorted(glob.glob(f"{self.input_folder}/results/depth*.png"))
         language_seg_paths = natsorted(glob.glob(f"{self.input_folder}/language_features_dim3/rgb_*_s.npy"))
         language_feat_paths = natsorted(glob.glob(f"{self.input_folder}/language_features_dim3/rgb_*_f.npy"))
         embedding_paths = None
